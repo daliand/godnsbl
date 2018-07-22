@@ -10,3 +10,9 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+.glide/
+
+.vscode/echo
+
+.DS_Store
