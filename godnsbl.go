@@ -25,7 +25,8 @@ var Blacklists = []string{
 	"dnsbl-3.uceprotect.net",
 	"spam.spamrats.com",
 	"dnsbl.kempt.net",
-	"b.barracudacentral.org"}
+	"b.barracudacentral.org",
+	"dnsbl.spfbl.net"}
 
 /*
 RBLResults holds the results of the lookup.
@@ -47,10 +48,10 @@ type Result struct {
 	Listed bool `json:"listed"`
 	// RBL lists sometimes add extra information as a TXT record
 	// if any info is present, it will be stored here.
-	Text string `json:"text"`
+	//Text string `json:"text"`
 	// Error represents any error that was encountered (DNS timeout, host not
 	// found, etc.) if any
-	Error bool `json:"error"`
+	Error int `json:"error"`
 	// ErrorType is the type of error encountered if any
 	ErrorType error `json:"error_type"`
 }
@@ -81,27 +82,40 @@ func ReverseIP(ip net.IP) (string, error) {
 	return fmt.Sprintf("%s.%s.%s.%s", s[3], s[2], s[1], s[0]), nil
 }
 
-func Lookup(ip net.IP) RBLResults {
+// Lookup Queries []Blacklists against a server
+// TODO: init the library with multiple servers
+func Lookup(host, server string, port int) RBLResults {
 
 	res := RBLResults{
-		Host: ip.String()}
+		Host: host}
+
+	ip := net.ParseIP(host)
+
+	// We're dealing with host
+	if ip == nil {
+
+	}
 
 	rev, _ := ReverseIP(ip)
 
 	for _, bl := range Blacklists {
 		re := Result{
-			List: bl}
+			List:   bl,
+			Listed: true}
 
 		m := new(dns.Msg)
 		host := fmt.Sprintf("%s.%s.", rev, bl)
 		m.SetQuestion(host, dns.TypeA)
 
-		r, err := dns.Exchange(m, "8.8.8.8:53")
+		r, err := dns.Exchange(m, fmt.Sprintf("%s:%d", server, port))
 		if err != nil {
 			re.ErrorType = err
 		}
 		if r == nil || r.Rcode != dns.RcodeSuccess {
 			re.ErrorType = err
+		}
+		if r.Rcode == dns.RcodeNameError {
+			re.Listed = false
 		}
 		res.Results = append(res.Results, re)
 	}

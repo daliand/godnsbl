@@ -1,7 +1,6 @@
 package godnsbl
 
 import (
-	"net"
 	"testing"
 )
 
@@ -14,7 +13,10 @@ import (
 // }
 
 func TestLookup(t *testing.T) {
-	ip := net.ParseIP("203.118.158.158")
-	r := Lookup(ip)
+	// good
+	r := Lookup("203.118.158.158", "8.8.8.8", 53)
+
+	//bad
+	//r := Lookup("203.118.158.158", "8.8.8.8", 53)
 	t.Logf("Lookup: %v", r)
 }
