@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 )
@@ -33,8 +34,10 @@ RBLResults holds the results of the lookup.
 */
 type RBLResults struct {
 	// Host is the host or IP that was passed (i.e. smtp.gmail.com)
-	Host string `json:"host"`
-	// Results is a slice of Results - one per IP address searched
+	Host  string `json:"host"`
+	Err   error  `json:"err"`
+	RCode int
+	// Results is a slice of Results - one per Blacklist address searched
 	Results []Result `json:"results"`
 }
 
@@ -43,15 +46,16 @@ Result holds the individual IP lookup results for each RBL search
 */
 type Result struct {
 	// List is the RBL that was searched
-	List string `json:"address"`
+	List       string `json:"address"`
+	LookupHost string `json:"lookup"`
 	// Listed indicates whether or not the IP was on the RBL
 	Listed bool `json:"listed"`
 	// RBL lists sometimes add extra information as a TXT record
 	// if any info is present, it will be stored here.
-	//Text string `json:"text"`
+	Text string `json:"text"`
 	// Error represents any error that was encountered (DNS timeout, host not
 	// found, etc.) if any
-	Error int `json:"error"`
+	Rcode int `json:"rcode"`
 	// ErrorType is the type of error encountered if any
 	ErrorType error `json:"error_type"`
 }
@@ -76,10 +80,16 @@ func ReverseIP(ip net.IP) (string, error) {
 	if ip.To4() == nil {
 		return "", ErrInvalidIP
 	}
+	// split into slice by dot .
+	addressSlice := strings.Split(ip.String(), ".")
+	reverseSlice := []string{}
 
-	s := strings.Split(ip.String(), ".")
+	for i := range addressSlice {
+		octet := addressSlice[len(addressSlice)-1-i]
+		reverseSlice = append(reverseSlice, octet)
+	}
 
-	return fmt.Sprintf("%s.%s.%s.%s", s[3], s[2], s[1], s[0]), nil
+	return strings.Join(reverseSlice, "."), nil
 }
 
 // Lookup Queries []Blacklists against a server
@@ -93,32 +103,59 @@ func Lookup(host, server string, port int) RBLResults {
 
 	// We're dealing with host
 	if ip == nil {
-
+		am := new(dns.Msg)
+		am.SetQuestion(dns.Fqdn(host), dns.TypeA)
+		ar, aerr := dns.Exchange(am, fmt.Sprintf("%s:%d", server, port))
+		if aerr != nil {
+			res.Err = aerr
+			return res
+		}
+		if ar.Rcode != dns.RcodeSuccess {
+			res.RCode = ar.Rcode
+			return res
+		}
+		for _, a := range ar.Answer {
+			if mx, ok := a.(*dns.A); ok {
+				ip = mx.A
+			}
+		}
 	}
 
 	rev, _ := ReverseIP(ip)
+	fmt.Printf("host lookup: %s", rev)
 
-	for _, bl := range Blacklists {
-		re := Result{
-			List:   bl,
-			Listed: true}
+	wg := &sync.WaitGroup{}
+	res.Results = make([]Result, len(Blacklists))
+	for i, source := range Blacklists {
+		wg.Add(1)
+		go func(i int, source string) {
+			defer wg.Done()
 
-		m := new(dns.Msg)
-		host := fmt.Sprintf("%s.%s.", rev, bl)
-		m.SetQuestion(host, dns.TypeA)
+			m := new(dns.Msg)
+			host := fmt.Sprintf("%s.%s", rev, Blacklists[i])
+			m.SetQuestion(dns.Fqdn(host), dns.TypeA)
 
-		r, err := dns.Exchange(m, fmt.Sprintf("%s:%d", server, port))
-		if err != nil {
-			re.ErrorType = err
-		}
-		if r == nil || r.Rcode != dns.RcodeSuccess {
-			re.ErrorType = err
-		}
-		if r.Rcode == dns.RcodeNameError {
-			re.Listed = false
-		}
-		res.Results = append(res.Results, re)
+			r, err := dns.Exchange(m, fmt.Sprintf("%s:%d", server, port))
+			if err != nil {
+				res.Results[i].ErrorType = err
+			}
+			if r == nil || r.Rcode != dns.RcodeSuccess {
+				res.Results[i].ErrorType = err
+			}
+			if r.Rcode == dns.RcodeNameError {
+				res.Results[i].Listed = false
+				res.Results[i].Rcode = r.Rcode
+			} else {
+				res.Results[i].Listed = true
+				res.Results[i].Rcode = r.Rcode
+			}
+			res.Results[i].List = source
+			res.Results[i].LookupHost = host
+
+		}(i, source)
 	}
+
+	wg.Wait()
 
 	return res
 }
