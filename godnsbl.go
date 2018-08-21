@@ -141,13 +141,14 @@ func Lookup(host, server string, port int) RBLResults {
 			}
 			if r == nil || r.Rcode != dns.RcodeSuccess {
 				res.Results[i].ErrorType = err
-			}
-			if r.Rcode == dns.RcodeNameError {
-				res.Results[i].Listed = false
-				res.Results[i].Rcode = r.Rcode
 			} else {
-				res.Results[i].Listed = true
-				res.Results[i].Rcode = r.Rcode
+				if r.Rcode == dns.RcodeNameError {
+					res.Results[i].Listed = false
+					res.Results[i].Rcode = r.Rcode
+				} else {
+					res.Results[i].Listed = true
+					res.Results[i].Rcode = r.Rcode
+				}
 			}
 			res.Results[i].List = source
 			res.Results[i].LookupHost = host
