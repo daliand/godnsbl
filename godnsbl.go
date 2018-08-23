@@ -1,6 +1,7 @@
 package godnsbl
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -12,22 +13,25 @@ import (
 /*
 Blacklists is the list of blackhole lists to check against
 */
-var Blacklists = []string{
-	"zen.spamhaus.org",
-	"bl.spamcop.net",
-	"psbl.surriel.com",
-	"ix.dnsbl.manitu.net",
-	"dnsbl.sorbs.net",
-	"blackholes.five-ten-sg.com",
-	"combined.njabl.org",
-	"l2.apews.org",
-	"dnsbl-1.uceprotect.net",
-	"dnsbl-2.uceprotect.net",
-	"dnsbl-3.uceprotect.net",
-	"spam.spamrats.com",
-	"dnsbl.kempt.net",
-	"b.barracudacentral.org",
-	"dnsbl.spfbl.net"}
+var (
+	Blacklists = []string{
+		"zen.spamhaus.org",
+		"bl.spamcop.net",
+		"psbl.surriel.com",
+		"ix.dnsbl.manitu.net",
+		"dnsbl.sorbs.net",
+		"blackholes.five-ten-sg.com",
+		// "combined.njabl.org",  // timing out
+		"l2.apews.org",
+		"dnsbl-1.uceprotect.net",
+		"dnsbl-2.uceprotect.net",
+		"dnsbl-3.uceprotect.net",
+		"spam.spamrats.com",
+		"dnsbl.kempt.net",
+		"b.barracudacentral.org",
+		"dnsbl.spfbl.net",
+	}
+)
 
 /*
 RBLResults holds the results of the lookup.
@@ -56,6 +60,8 @@ type Result struct {
 	// Error represents any error that was encountered (DNS timeout, host not
 	// found, etc.) if any
 	Rcode int `json:"rcode"`
+	// TTL is the DNS ttl returned
+	TTL uint32 `json:"ttl"`
 	// ErrorType is the type of error encountered if any
 	ErrorType error `json:"error_type"`
 }
@@ -97,7 +103,8 @@ func ReverseIP(ip net.IP) (string, error) {
 func Lookup(host, server string, port int) RBLResults {
 
 	res := RBLResults{
-		Host: host}
+		Host: host,
+	}
 
 	ip := net.ParseIP(host)
 
@@ -117,12 +124,16 @@ func Lookup(host, server string, port int) RBLResults {
 		for _, a := range ar.Answer {
 			if mx, ok := a.(*dns.A); ok {
 				ip = mx.A
+				break
 			}
 		}
 	}
 
-	rev, _ := ReverseIP(ip)
-	fmt.Printf("host lookup: %s", rev)
+	rev, revErr := ReverseIP(ip)
+	if revErr != nil {
+		return res
+	}
+	// fmt.Printf("ReverseIP host lookup: %s\n", rev)
 
 	wg := &sync.WaitGroup{}
 	res.Results = make([]Result, len(Blacklists))
@@ -130,29 +141,36 @@ func Lookup(host, server string, port int) RBLResults {
 		wg.Add(1)
 		go func(i int, source string) {
 			defer wg.Done()
+			res.Results[i].List = source
 
 			m := new(dns.Msg)
 			host := fmt.Sprintf("%s.%s", rev, Blacklists[i])
 			m.SetQuestion(dns.Fqdn(host), dns.TypeA)
+			res.Results[i].LookupHost = host
 
 			r, err := dns.Exchange(m, fmt.Sprintf("%s:%d", server, port))
 			if err != nil {
 				res.Results[i].ErrorType = err
 			}
-			if r == nil || r.Rcode != dns.RcodeSuccess {
-				res.Results[i].ErrorType = err
-			} else {
-				if r.Rcode == dns.RcodeNameError {
+			if r != nil {
+				res.Results[i].Rcode = r.Rcode
+				switch r.Rcode {
+				case dns.RcodeSuccess:
+					if len(r.Answer) > 0 && r.Answer[0].Header() != nil {
+						res.Results[i].Listed = true
+						res.Results[i].TTL = r.Answer[0].Header().Ttl
+					}
+				case dns.RcodeNameError:
+					// correct response code when not listed
 					res.Results[i].Listed = false
-					res.Results[i].Rcode = r.Rcode
-				} else {
-					res.Results[i].Listed = true
-					res.Results[i].Rcode = r.Rcode
+				case dns.RcodeServerFailure:
+					// we cant be sure this is listed
+					res.Results[i].Listed = false
+					if res.Results[i].ErrorType == nil {
+						res.Results[i].ErrorType = errors.New("Server failure")
+					}
 				}
 			}
-			res.Results[i].List = source
-			res.Results[i].LookupHost = host
-
 		}(i, source)
 	}
 
