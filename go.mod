@@ -1,4 +1,4 @@
-module github.com/dalia/godnsbl
+module github.com/daliand/godnsbl
 
 require (
 	github.com/miekg/dns v1.0.10
