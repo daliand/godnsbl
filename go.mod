@@ -1,7 +1,12 @@
 module github.com/daliand/godnsbl
 
+go 1.19
+
+require github.com/miekg/dns v1.1.50
+
 require (
-	github.com/miekg/dns v1.0.10
-	golang.org/x/crypto v0.0.0-20180910181607-0e37d006457b // indirect
-	golang.org/x/net v0.0.0-20180921000356-2f5d2388922f // indirect
+	golang.org/x/mod v0.8.0 // indirect
+	golang.org/x/net v0.7.0 // indirect
+	golang.org/x/sys v0.5.0 // indirect
+	golang.org/x/tools v0.6.0 // indirect
 )
